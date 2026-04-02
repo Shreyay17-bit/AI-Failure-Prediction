@@ -1,0 +1,7 @@
+Type,Air temperature [K],Process temperature [K],Rotational speed [rpm],Torque [Nm],Tool wear [min],Machine failure
+L,300,310,1500,40,50,0
+H,320,330,2000,80,200,1
+M,290,300,1200,30,20,0
+L,310,320,1800,70,150,1
+L,305,315,1550,42,55,0
+M,325,335,2100,85,210,1
