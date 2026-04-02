@@ -3,93 +3,128 @@ import pandas as pd
 import numpy as np
 import pickle
 import plotly.graph_objects as go
-import psutil
 import time
-from streamlit_javascript import st_javascript # <--- New bridge
+from streamlit_javascript import st_javascript
 
 # -----------------------------
-# 1. UI & DEVICE DETECTION
+# 1. ADVANCED DEVICE DETECTION
 # -----------------------------
-st.set_page_config(page_title="Nexus AI - Mobile Predict", layout="wide")
+st.set_page_config(page_title="Nexus AI - Multi-Platform", layout="wide")
 
-# This script asks the phone: "Who are you?"
-user_info = st_javascript("navigator.userAgent")
+# This script pulls the full hardware identity from the browser
+ui_string = st_javascript("navigator.userAgent")
 
-st.sidebar.title("🌐 Nexus Control")
+# Logic to sort the device type
+if ui_string:
+    if "iPhone" in ui_string or "iPad" in ui_string:
+        device_category = "📱 Apple iOS Device"
+        model_type = 0  # High Tier
+    elif "Android" in ui_string:
+        device_category = "🤖 Android Mobile"
+        model_type = 2  # Medium Tier
+    elif "Windows" in ui_string or "Macintosh" in ui_string or "Linux" in ui_string:
+        device_category = "💻 Desktop PC / Workstation"
+        model_type = 1  # Standard Tier
+    else:
+        device_category = "🌐 Unknown Terminal"
+        model_type = 2
+else:
+    device_category = "⌛ Synchronizing..."
+    model_type = 2
 
 # -----------------------------
-# 2. DYNAMIC DEVICE RECOGNITION
+# 2. SIDEBAR & UI STYLING
 # -----------------------------
-detected_device = "Generic Device"
-if user_info:
-    if "iPhone" in user_info:
-        detected_device = "Apple iPhone"
-    elif "Android" in user_info:
-        detected_device = "Android Smartphone"
-    elif "Windows" in user_info:
-        detected_device = "Windows Workstation"
+st.sidebar.title("📡 System Identification")
+st.sidebar.info(f"Identity: {device_category}")
 
-st.sidebar.success(f"Connected: {detected_device}")
+# Custom Cyberpunk Theme
+st.markdown("""
+    <style>
+    .main { background-color: #05070a; }
+    [data-testid="stMetricValue"] { color: #00e5ff; font-family: 'Share Tech Mono', monospace; }
+    .stAlert { background-color: #111; border: 1px solid #00e5ff; }
+    </style>
+    """, unsafe_allow_html=True)
 
-system_mode = st.sidebar.selectbox("Analysis Mode", 
-    ["📱 Mobile Diagnostics", "🏭 Industrial CNC", "💻 Cloud Server"])
+# Toggle between the Live Device and Industrial Assets
+mode = st.sidebar.radio("Analysis Target", ["Live Connected Device", "Industrial CNC Mill"])
 
 # -----------------------------
-# 3. THE "6-COLUMN" DATA PREP
+# 3. DYNAMIC PARAMETER MAPPING
 # -----------------------------
-# We must always pass exactly 6 values to the model
-# [Type, AirTemp, ProcTemp, Speed, Torque, Wear]
-
-if system_mode == "📱 Mobile Diagnostics":
-    st.sidebar.subheader(f"{detected_device} Sensors")
+if mode == "Live Connected Device":
+    st.sidebar.subheader(f"{device_category} Telemetry")
     
-    # Simulating 'Live' behavior with a small random wiggle
-    # In a real IoT project, this is where your ESP32 data would go
-    temp_base = st.sidebar.slider("Battery Temp (°C)", 20, 60, 35)
-    live_temp = temp_base + np.random.normal(0, 0.2)
+    # Sensors adjust based on whether it's a PC or Phone
+    if "PC" in device_category:
+        t_label = "CPU Package Temp (°C)"
+        p_label = "GPU Junction Temp (°C)"
+        v_label = "PSU Rail Voltage (V)"
+    else:
+        t_label = "Battery Thermal (°C)"
+        p_label = "Logic Board Temp (°C)"
+        v_label = "Lithium Voltage (mV)"
+
+    t1 = st.sidebar.slider(t_label, 15, 80, 38)
+    t2 = st.sidebar.slider(p_label, 20, 90, 42)
+    volts = st.sidebar.slider(v_label, 3000, 4500, 3800)
+    wear = st.sidebar.slider("Component Wear Index", 0, 1000, 150)
     
-    # Mapping to 6 columns
-    vals = [0, live_temp + 273, live_temp + 278, 0, 15.5, 120]
-    labels = ["Tier", "Internal Temp", "Chipset Temp", "Fan", "Voltage Load", "Cycle Wear"]
+    # Standardizing for the 6-column model
+    vals = [model_type, t1 + 273, t2 + 273, 2500, (volts-3000)/10, wear/4]
+    sensor_names = ["Category", t_label, p_label, "Fan/Cooling", "Load Stress", "Life Cycles"]
 
-elif system_mode == "🏭 Industrial CNC":
-    # ... (Keep your existing CNC sliders here) ...
-    vals = [1, 300, 312, 1800, 45, 60]
-    labels = ["Class", "Ambient", "Spindle", "RPM", "Torque", "Wear"]
-
-else: # Cloud Server
-    cpu = psutil.cpu_percent()
-    vals = [2, 298, 310 + (cpu*0.5), 2400, cpu, 15]
-    labels = ["Grade", "Inlet", "CPU Core", "Fan", "Load", "Uptime"]
+else:
+    # CNC Mode (Manual Inputs)
+    vals = [1, 298, 310, 1800, 45, 20]
+    sensor_names = ["Class", "Air Temp", "Proc Temp", "RPM", "Torque", "Tool Wear"]
 
 # -----------------------------
-# 4. PREDICTION & UI
+# 4. AI INFERENCE ENGINE
 # -----------------------------
-# Load model (make sure model.pkl is on GitHub!)
 try:
     with open("model.pkl", "rb") as f:
-        engine = pickle.load(f)
-    model = engine["model"]
-    feature_names = engine["features"]
+        nexus = pickle.load(f)
     
-    input_df = pd.DataFrame([vals], columns=feature_names)
-    prob = model.predict_proba(input_df)[0][1] * 100
+    model = nexus["model"]
+    features = nexus["features"]
     
-    st.title(f"🚀 {detected_device} Integrity Report")
+    input_df = pd.DataFrame([vals], columns=features)
+    risk = model.predict_proba(input_df)[0][1] * 100
+
+    # -----------------------------
+    # 5. DASHBOARD VISUALS
+    # -----------------------------
+    st.title(f"🔍 Diagnostic: {device_category}")
     
-    col1, col2 = st.columns(2)
-    col1.metric("Failure Risk", f"{prob:.1f}%")
-    col2.metric("Device State", "STABLE" if prob < 40 else "CRITICAL")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Failure Risk", f"{risk:.2f}%")
+    col2.metric("Detection Sync", "ACTIVE" if ui_string else "PENDING")
     
-    # Gauge Chart
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number", value=prob,
-        gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "#00d4ff"}}))
-    st.plotly_chart(fig)
+    health = "OPTIMAL" if risk < 30 else ("WARNING" if risk < 70 else "CRITICAL")
+    col3.metric("Health Status", health)
+
+    st.divider()
+
+    # Gauge and Trend
+    c_left, c_right = st.columns([1, 1])
+    with c_left:
+        fig_g = go.Figure(go.Indicator(
+            mode="gauge+number", value=risk,
+            title={'text': "Risk Index"},
+            gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "#00e5ff"}}))
+        fig_g.update_layout(template="plotly_dark", height=300)
+        st.plotly_chart(fig_g, use_container_width=True)
+        
+    with c_right:
+        st.subheader("Sensor Detail")
+        for i in range(1, 6):
+            st.write(f"**{sensor_names[i]}:** {vals[i]:.1f}")
 
 except Exception as e:
-    st.error(f"Sync Error: {e}")
+    st.warning("Hardware link initializing... Please wait 2 seconds.")
 
-# Refresh to make the "Live" feeling work
-time.sleep(2)
+# Real-time refresh
+time.sleep(1)
 st.rerun()

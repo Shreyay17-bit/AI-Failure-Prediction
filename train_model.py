@@ -1,99 +1,44 @@
 import pandas as pd
 import numpy as np
-import pickle
-import yaml
-import logging
-from datetime import datetime
-from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import classification_report, confusion_matrix
+import pickle
 
-# -----------------------------
-# 1. LOGGING SETUP (Industrial Standard)
-# -----------------------------
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# 1. Create a "Smart" Dataset
+np.random.seed(42)
+n_samples = 2000
 
-def train_pipeline(data_path="dataset.csv"):
-    logger.info("🚀 Starting Predictive Maintenance Training Pipeline")
+# Features: [Type, AirTemp, ProcTemp, Speed, Torque, Wear]
+data = {
+    'Type': np.random.choice([0, 1, 2], n_samples),
+    'AirTemp': np.random.uniform(285, 310, n_samples),
+    'ProcTemp': np.random.uniform(290, 350, n_samples),
+    'Speed': np.random.uniform(500, 4500, n_samples),
+    'Torque': np.random.uniform(10, 95, n_samples),
+    'Wear': np.random.uniform(0, 250, n_samples)
+}
 
-    # -----------------------------
-    # 2. DATA LOADING & CLEANING
-    # -----------------------------
-    try:
-        df = pd.read_csv(data_path)
-    except FileNotFoundError:
-        logger.error(f"Dataset not found at {data_path}")
-        return
+df = pd.DataFrame(data)
 
-    # Drop non-predictive IDs
-    df = df.drop(columns=[col for col in ["UDI", "Product ID"] if col in df.columns])
-
-    # -----------------------------
-    # 3. ADVANCED PREPROCESSING
-    # -----------------------------
-    # We must save the LabelEncoder to decode 'Type' in the App later
-    le = LabelEncoder()
-    if "Type" in df.columns:
-        df["Type"] = le.fit_transform(df["Type"])
-        logger.info(f"Encoded 'Type' categories: {list(le.classes_)}")
-
-    X = df.drop("Machine failure", axis=1)
-    y = df["Machine failure"]
-
-    # Check for Class Imbalance
-    fail_rate = (y.sum() / len(y)) * 100
-    logger.info(f"Dataset Failure Rate: {fail_rate:.2f}%")
-
-    X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42
+# 2. Logic: Define what "Failure" looks like
+# If ProcTemp > 330 AND Wear > 180, it's almost certainly a failure (1)
+score = (
+    (df['ProcTemp'] - 290) * 0.4 + 
+    (df['Wear'] * 0.3) + 
+    (df['Torque'] * 0.2) +
+    (df['Type'] * 5)
 )
+# Normalize and create Target (0 = Healthy, 1 = Fail)
+df['Target'] = (score > np.percentile(score, 75)).astype(int)
 
-    # -----------------------------
-    # 4. MODEL TRAINING (Balanced)
-    # -----------------------------
-    # 'class_weight' is critical for industrial failure prediction
-    model = RandomForestClassifier(
-        n_estimators=300,
-        max_depth=12,
-        class_weight="balanced", 
-        random_state=42,
-        n_jobs=-1 # Use all CPU cores
-    )
+# 3. Train the Model
+X = df.drop('Target', axis=1)
+y = df['Target']
 
-    logger.info("Training Random Forest Model...")
-    model.fit(X_train, y_train)
+model = RandomForestClassifier(n_estimators=100)
+model.fit(X, y)
 
-    # -----------------------------
-    # 5. RIGOROUS EVALUATION
-    # -----------------------------
-    y_pred = model.predict(X_test)
-    
-    logger.info("\n" + classification_report(y_test, y_pred))
-    
-    # Calculate Business Metric: Precision vs Recall
-    # We care more about RECALL (don't miss a failure) 
-    # than PRECISION (don't have false alarms) in industry.
+# 4. Save with Metadata
+with open("model.pkl", "wb") as f:
+    pickle.dump({"model": model, "features": list(X.columns)}, f)
 
-    # -----------------------------
-    # 6. ARTIFACT EXPORT (The "Model Package")
-    # -----------------------------
-    model_package = {
-        "model": model,
-        "features": list(X.columns),
-        "label_encoder": le,
-        "metadata": {
-            "train_date": datetime.now().strftime("%Y-%m-%d"),
-            "accuracy": model.score(X_test, y_test),
-            "n_features": len(X.columns)
-        }
-    }
-
-    with open("model.pkl", "wb") as f:
-        pickle.dump(model_package, f)
-    
-    logger.info("✅ Model Package saved successfully as 'model.pkl'")
-
-if __name__ == "__main__":
-    train_pipeline()
+print("✅ Success! New model.pkl generated with varied logic.")
