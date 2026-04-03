@@ -5,96 +5,138 @@ import pickle
 import time
 from streamlit_javascript import st_javascript
 
-st.set_page_config(page_title="Nexus AI - Diagnostics", layout="wide")
+st.set_page_config(page_title="Nexus AI - Hardware Diagnostics", layout="wide")
 
 # -----------------------------
-# 1. THE HARDWARE PROBE
+# 1. UNIFIED HARDWARE BRIDGE
 # -----------------------------
-# Simplified JS to pull UA and Cores immediately
-js_code = """
-(function() {
+# Detects User Agent, CPU Cores, and Battery in one go
+js_bridge = """
+async function getFullSystem() {
+    let bat = { level: 0.35, charging: false };
+    try {
+        if (navigator.getBattery) {
+            const b = await navigator.getBattery();
+            bat = { level: b.level, charging: b.charging };
+        }
+    } catch (e) {}
+
     return {
         ua: navigator.userAgent,
         cores: navigator.hardwareConcurrency || 4,
-        ram: navigator.deviceMemory || 8
+        battery: bat
     };
-})()
+}
+getFullSystem();
 """
-hw = st_javascript(js_code)
+hw = st_javascript(js_bridge)
 
 # -----------------------------
-# 2. THE BATTERY PROBE (SEPARATE)
-# -----------------------------
-# Separating this because it is the most likely part to be blocked
-batt_js = "navigator.getBattery().then(b => b.level)"
-raw_batt = st_javascript(batt_js)
-
-# -----------------------------
-# 3. DATA VALIDATION & OVERRIDE
+# 2. SIDEBAR & MODE SELECTION
 # -----------------------------
 st.sidebar.title("System Controls")
 
-# If the browser blocks the battery, we use your 35% as a manual starting point
-if raw_batt is None or raw_batt == 0:
-    st.sidebar.warning("Hardware Sensors Restricted")
-    battery_input = st.sidebar.slider("Manual Battery Override (%)", 0, 100, 35)
-    is_auto = False
-else:
-    battery_input = int(raw_batt * 100)
-    st.sidebar.success(f"Live Sensor Active: {battery_input}%")
-    is_auto = True
+# Analysis Target Toggle
+analysis_mode = st.sidebar.radio(
+    "Analysis Target",
+    ["Live Connected Device", "Industrial CNC Mill"]
+)
 
 # -----------------------------
-# 4. PROCESSING & INFERENCE
+# 3. CORE LOGIC & PARAMETER MAPPING
 # -----------------------------
+# We initialize variables with safe defaults to prevent the 'Initializing' hang
+battery_val = 35 
+core_count = 4
+is_windows = True
+is_charging = False
+
 if hw:
+    # Accurate Data Extraction from Bridge
     ua = hw.get("ua", "")
-    cores = hw.get("cores", 4)
+    core_count = hw.get("cores", 4)
+    raw_bat = hw.get("battery", {}).get("level", 0.35)
+    battery_val = int(raw_bat * 100)
+    is_charging = hw.get("battery", {}).get("charging", False)
     is_windows = "Windows" in ua
     
-    # Risk Logic based on your 35%
-    # Lower battery = Higher Wear = Higher Risk
-    wear_idx = (100 - battery_input) * 2.3
-    temp_k = 302 + (cores * 1.2)
-    
-    # Vector: [Type, AirTemp, ProcTemp, Speed, Torque, Wear]
-    input_vec = [1 if is_windows else 0, temp_k, temp_k + 5, cores * 800, 45.0, wear_idx]
+    st.sidebar.success(f"System Sync: ACTIVE ({battery_val}%)")
+else:
+    st.sidebar.warning("Sync Pending: Using Manual Defaults")
+    # Manual Override slider if hardware is slow
+    battery_val = st.sidebar.slider("Manual Battery Override (%)", 0, 100, 35)
 
-    # Dashboard
-    st.title(f"System Diagnostics: {'Workstation' if is_windows else 'Mobile'}")
+# -----------------------------
+# 4. DATA MAPPING FOR AI MODEL
+# -----------------------------
+if analysis_mode == "Live Connected Device":
+    device_name = "Desktop Workstation" if is_windows else "Mobile Device"
+    type_id = 1 if is_windows else 0
     
-    c1, c2, c3 = st.columns(3)
+    # Map real battery to AI 'Wear'
+    wear_idx = (100 - battery_val) * 2.2
+    temp_k = 302 + (core_count * 1.5)
+    speed_sim = core_count * 750
     
-    try:
-        with open("model.pkl", "rb") as f:
-            nexus = pickle.load(f)
-        
-        # This will finally move the 0.00% risk!
-        prob = nexus["model"].predict_proba([input_vec])[0][1] * 100
-        
-        c1.metric("Failure Risk", f"{prob:.2f}%")
-        c2.metric("Battery Level", f"{battery_input}%")
-        c3.metric("Logic Cores", cores)
-        
-        st.divider()
-        
-        # Technical Details
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.subheader("Hardware Detail")
-            st.write(f"Identity: {ua[:50]}...")
-            st.write(f"Sensor Mode: {'Automated' if is_auto else 'Manual Override'}")
-        
-        with col_b:
-            st.subheader("Neural Input Stream")
-            st.json({"wear": wear_idx, "temp": temp_k, "vec": input_vec})
-
-    except Exception as e:
-        st.error(f"Model Sync Error: {e}")
+    input_vec = [type_id, temp_k, temp_k + 5, speed_sim, 45.0, wear_idx]
+    display_metrics = {
+        "Ambient": f"{temp_k - 273.15:.1f} °C",
+        "Core": f"{temp_k - 268.15:.1f} °C",
+        "Clock": f"{speed_sim} MHz",
+        "Source": "External AC" if is_charging else "Battery Port"
+    }
 
 else:
-    st.info("Initializing System Bridge...")
+    device_name = "Industrial CNC Mill"
+    type_id = 1 # Industrial class
+    
+    # Industrial Mode uses different scaling
+    st.sidebar.subheader("CNC Spindle Controls")
+    rpm = st.sidebar.slider("Rotational Speed (RPM)", 0, 5000, 1800)
+    torque = st.sidebar.slider("Torque (Nm)", 0, 100, 45)
+    
+    input_vec = [type_id, 298.0, 310.0, rpm, torque, 20.0]
+    display_metrics = {
+        "Ambient": "298.0 K",
+        "Spindle": "310.0 K",
+        "Speed": f"{rpm} RPM",
+        "Load": f"{torque} Nm"
+    }
 
-# Refresh
+# -----------------------------
+# 5. DASHBOARD UI
+# -----------------------------
+st.title(f"System Diagnostics: {device_name}")
+
+c1, c2, c3 = st.columns(3)
+
+try:
+    with open("model.pkl", "rb") as f:
+        nexus = pickle.load(f)
+    
+    # Run Inference
+    risk = nexus["model"].predict_proba([input_vec])[0][1] * 100
+    
+    c1.metric("Failure Risk", f"{risk:.2f}%")
+    c2.metric("Primary Sensor", f"{battery_val if analysis_mode == 'Live Connected Device' else rpm}%")
+    c3.metric("Health Status", "OPTIMAL" if risk < 30 else "WARNING")
+
+    st.divider()
+    
+    # Detailed Data Grid
+    col_left, col_right = st.columns(2)
+    with col_left:
+        st.subheader("Sensor Details")
+        for k, v in display_metrics.items():
+            st.write(f"**{k}:** {v}")
+            
+    with col_right:
+        st.subheader("Neural Input Stream")
+        st.json({"vector": input_vec, "wear_index": input_vec[5]})
+
+except Exception as e:
+    st.error(f"Inference Engine Offline: {e}")
+
+# Automated Refresh
 time.sleep(4)
 st.rerun()
