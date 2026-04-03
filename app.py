@@ -2,129 +2,132 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import pickle
-import plotly.graph_objects as go
 import time
 from streamlit_javascript import st_javascript
 
-# -----------------------------
-# 1. ADVANCED DEVICE DETECTION
-# -----------------------------
-st.set_page_config(page_title="Nexus AI - Multi-Platform", layout="wide")
+st.set_page_config(page_title="Nexus AI - Hardware Interface", layout="wide")
 
-# This script pulls the full hardware identity from the browser
-ui_string = st_javascript("navigator.userAgent")
+# -----------------------------
+# 1. HARDWARE DATA ACQUISITION
+# -----------------------------
+# Using JavaScript to bridge the browser-to-hardware gap
+device_js = """
+async function getHardwareData() {
+    let battery = { level: 1, charging: true };
+    try {
+        if (navigator.getBattery) {
+            const b = await navigator.getBattery();
+            battery = { level: b.level, charging: b.charging };
+        }
+    } catch (e) { 
+        console.log("Battery API Restricted"); 
+    }
 
-# Logic to sort the device type
-if ui_string:
-    if "iPhone" in ui_string or "iPad" in ui_string:
-        device_category = "📱 Apple iOS Device"
-        model_type = 0  # High Tier
-    elif "Android" in ui_string:
-        device_category = "🤖 Android Mobile"
-        model_type = 2  # Medium Tier
-    elif "Windows" in ui_string or "Macintosh" in ui_string or "Linux" in ui_string:
-        device_category = "💻 Desktop PC / Workstation"
-        model_type = 1  # Standard Tier
+    return {
+        ua: navigator.userAgent,
+        memory: navigator.deviceMemory || "N/A", 
+        logic_cores: navigator.hardwareConcurrency || "N/A",
+        battery: battery
+    };
+}
+getHardwareData();
+"""
+
+# Execute JS and catch result
+hw_data = st_javascript(device_js)
+
+# -----------------------------
+# 2. LOGIC AND CLASSIFICATION
+# -----------------------------
+if hw_data:
+    ua_string = hw_data.get("ua", "")
+    
+    # Categorize Device Type for the Model
+    if "iPhone" in ua_string or "iPad" in ua_string:
+        device_label = "Apple iOS Mobile"
+        model_type_code = 0
+    elif "Android" in ua_string:
+        device_label = "Android Mobile"
+        model_type_code = 2
     else:
-        device_category = "🌐 Unknown Terminal"
-        model_type = 2
-else:
-    device_category = "⌛ Synchronizing..."
-    model_type = 2
+        device_label = "Desktop Workstation"
+        model_type_code = 1
 
-# -----------------------------
-# 2. SIDEBAR & UI STYLING
-# -----------------------------
-st.sidebar.title("📡 System Identification")
-st.sidebar.info(f"Identity: {device_category}")
-
-# Custom Cyberpunk Theme
-st.markdown("""
-    <style>
-    .main { background-color: #05070a; }
-    [data-testid="stMetricValue"] { color: #00e5ff; font-family: 'Share Tech Mono', monospace; }
-    .stAlert { background-color: #111; border: 1px solid #00e5ff; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# Toggle between the Live Device and Industrial Assets
-mode = st.sidebar.radio("Analysis Target", ["Live Connected Device", "Industrial CNC Mill"])
-
-# -----------------------------
-# 3. DYNAMIC PARAMETER MAPPING
-# -----------------------------
-if mode == "Live Connected Device":
-    st.sidebar.subheader(f"{device_category} Telemetry")
-    
-    # Sensors adjust based on whether it's a PC or Phone
-    if "PC" in device_category:
-        t_label = "CPU Package Temp (°C)"
-        p_label = "GPU Junction Temp (°C)"
-        v_label = "PSU Rail Voltage (V)"
-    else:
-        t_label = "Battery Thermal (°C)"
-        p_label = "Logic Board Temp (°C)"
-        v_label = "Lithium Voltage (mV)"
-
-    t1 = st.sidebar.slider(t_label, 15, 80, 38)
-    t2 = st.sidebar.slider(p_label, 20, 90, 42)
-    volts = st.sidebar.slider(v_label, 3000, 4500, 3800)
-    wear = st.sidebar.slider("Component Wear Index", 0, 1000, 150)
-    
-    # Standardizing for the 6-column model
-    vals = [model_type, t1 + 273, t2 + 273, 2500, (volts-3000)/10, wear/4]
-    sensor_names = ["Category", t_label, p_label, "Fan/Cooling", "Load Stress", "Life Cycles"]
-
-else:
-    # CNC Mode (Manual Inputs)
-    vals = [1, 298, 310, 1800, 45, 20]
-    sensor_names = ["Class", "Air Temp", "Proc Temp", "RPM", "Torque", "Tool Wear"]
-
-# -----------------------------
-# 4. AI INFERENCE ENGINE
-# -----------------------------
-try:
-    with open("model.pkl", "rb") as f:
-        nexus = pickle.load(f)
-    
-    model = nexus["model"]
-    features = nexus["features"]
-    
-    input_df = pd.DataFrame([vals], columns=features)
-    risk = model.predict_proba(input_df)[0][1] * 100
+    # Extract Accurate Values
+    raw_battery = hw_data.get("battery", {}).get("level", 1.0)
+    battery_pct = int(raw_battery * 100)
+    core_count = hw_data.get("logic_cores", 4)
+    ram_gb = hw_data.get("memory", "Standard")
+    is_charging = hw_data.get("battery", {}).get("charging", True)
 
     # -----------------------------
-    # 5. DASHBOARD VISUALS
+    # 3. AI PREDICTION MAPPING
     # -----------------------------
-    st.title(f"🔍 Diagnostic: {device_category}")
+    # Mapping real hardware metrics to the 6-column predictive model
+    # [Type, AirTemp, ProcTemp, Speed, Torque, Wear]
     
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Failure Risk", f"{risk:.2f}%")
-    col2.metric("Detection Sync", "ACTIVE" if ui_string else "PENDING")
+    # We derive 'Wear' from Battery Level (Inverse relationship)
+    # We derive 'Speed' from Hardware Cores
+    simulated_temp_c = 32.5 + (core_count if isinstance(core_count, int) else 4) * 0.8
+    wear_index = (100 - battery_pct) * 2.5
     
-    health = "OPTIMAL" if risk < 30 else ("WARNING" if risk < 70 else "CRITICAL")
-    col3.metric("Health Status", health)
+    input_vector = [
+        model_type_code, 
+        simulated_temp_c + 273.15, 
+        simulated_temp_c + 278.15, 
+        (core_count if isinstance(core_count, int) else 4) * 450, 
+        42.5, 
+        wear_index
+    ]
 
-    st.divider()
+    # -----------------------------
+    # 4. PROFESSIONAL DASHBOARD
+    # -----------------------------
+    st.title(f"Hardware Diagnostics: {device_label}")
+    st.caption(f"System UUID: {hash(ua_string) % 10**8} | Status: Synchronized")
 
-    # Gauge and Trend
-    c_left, c_right = st.columns([1, 1])
-    with c_left:
-        fig_g = go.Figure(go.Indicator(
-            mode="gauge+number", value=risk,
-            title={'text': "Risk Index"},
-            gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "#00e5ff"}}))
-        fig_g.update_layout(template="plotly_dark", height=300)
-        st.plotly_chart(fig_g, use_container_width=True)
+    # Metrics Row
+    m1, m2, m3, m4 = st.columns(4)
+    
+    # Load and Run Model
+    try:
+        with open("model.pkl", "rb") as f:
+            nexus_engine = pickle.load(f)
         
-    with c_right:
-        st.subheader("Sensor Detail")
-        for i in range(1, 6):
-            st.write(f"**{sensor_names[i]}:** {vals[i]:.1f}")
+        predictor = nexus_engine["model"]
+        failure_probability = predictor.predict_proba([input_vector])[0][1] * 100
+        
+        m1.metric("Failure Risk", f"{failure_probability:.2f}%")
+        m2.metric("Battery Level", f"{battery_pct}%")
+        m3.metric("Logic Cores", core_count)
+        m4.metric("Memory (RAM)", f"{ram_gb} GB")
 
-except Exception as e:
-    st.warning("Hardware link initializing... Please wait 2 seconds.")
+        st.divider()
 
-# Real-time refresh
-time.sleep(1)
+        # Detailed Technical Specs
+        col_left, col_right = st.columns(2)
+        
+        with col_left:
+            st.subheader("Device Metadata")
+            st.text(f"User Agent: {ua_string[:80]}...")
+            st.text(f"Power Source: {'AC Adapter' if is_charging else 'Battery Port'}")
+            st.text(f"Architecture: {device_label}")
+
+        with col_right:
+            st.subheader("Model Input Vector")
+            st.json({
+                "Core_Temp_Kelvin": round(input_vector[2], 2),
+                "Clock_Speed_Equivalent": input_vector[3],
+                "Calculated_Wear_Index": round(wear_index, 2),
+                "Machine_Type_ID": model_type_code
+            })
+
+    except Exception as error:
+        st.error(f"Inference Engine Offline: {error}")
+
+else:
+    st.info("Initializing Hardware Handshake...")
+
+# Automated Refresh Interval (3 Seconds)
+time.sleep(3)
 st.rerun()
