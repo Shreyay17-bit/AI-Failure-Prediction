@@ -5,106 +5,96 @@ import pickle
 import time
 from streamlit_javascript import st_javascript
 
-st.set_page_config(page_title="Nexus AI - Technical Interface", layout="wide")
+st.set_page_config(page_title="Nexus AI - Diagnostics", layout="wide")
 
 # -----------------------------
-# 1. LIVE HARDWARE BRIDGE
+# 1. THE HARDWARE PROBE
 # -----------------------------
-# This script bypasses standard caching to pull your actual 35% battery
-device_js = """
-async function getHardware() {
-    let bat = { level: null, charging: null };
-    try {
-        if (navigator.getBattery) {
-            const b = await navigator.getBattery();
-            bat = { level: b.level, charging: b.charging };
-        }
-    } catch (e) { console.log("API Blocked"); }
-
+# Simplified JS to pull UA and Cores immediately
+js_code = """
+(function() {
     return {
         ua: navigator.userAgent,
         cores: navigator.hardwareConcurrency || 4,
-        battery: bat
+        ram: navigator.deviceMemory || 8
     };
-}
-getHardware();
+})()
 """
-
-hw = st_javascript(device_js)
+hw = st_javascript(js_code)
 
 # -----------------------------
-# 2. THE HANDSHAKE PROTOCOL
+# 2. THE BATTERY PROBE (SEPARATE)
 # -----------------------------
-if not hw or hw.get("battery", {}).get("level") is None:
-    st.title("System Diagnostics")
-    st.warning("Hardware Synchronization Required")
-    st.info("Please click the button below to authorize the secure hardware sensor link.")
+# Separating this because it is the most likely part to be blocked
+batt_js = "navigator.getBattery().then(b => b.level)"
+raw_batt = st_javascript(batt_js)
+
+# -----------------------------
+# 3. DATA VALIDATION & OVERRIDE
+# -----------------------------
+st.sidebar.title("System Controls")
+
+# If the browser blocks the battery, we use your 35% as a manual starting point
+if raw_batt is None or raw_batt == 0:
+    st.sidebar.warning("Hardware Sensors Restricted")
+    battery_input = st.sidebar.slider("Manual Battery Override (%)", 0, 100, 35)
+    is_auto = False
+else:
+    battery_input = int(raw_batt * 100)
+    st.sidebar.success(f"Live Sensor Active: {battery_input}%")
+    is_auto = True
+
+# -----------------------------
+# 4. PROCESSING & INFERENCE
+# -----------------------------
+if hw:
+    ua = hw.get("ua", "")
+    cores = hw.get("cores", 4)
+    is_windows = "Windows" in ua
     
-    # The 'User Gesture' required by Chrome/Windows to release battery data
-    if st.button("Sync Real-Time Hardware"):
-        st.rerun()
-    st.stop() 
-
-# -----------------------------
-# 3. PROCESSING REAL-TIME METRICS
-# -----------------------------
-# This captures your exact 35% (0.35) and converts it to an integer
-actual_pct = int(hw["battery"]["level"] * 100)
-is_charging = hw["battery"]["charging"]
-cores = hw["cores"]
-ua = hw["ua"]
-
-# Identity Logic
-is_windows = "Windows" in ua
-type_id = 1 if is_windows else 0
-
-# Predictive Mapping Logic
-# Since you are at 35%, wear_index will be approx 143 (High)
-wear_index = (100 - actual_pct) * 2.2 
-thermal_k = 302 + (cores * 1.5)
-
-# Input Vector: [Type, AirTemp, ProcTemp, Speed, Torque, Wear]
-input_vector = [type_id, thermal_k, thermal_k + 6, cores * 750, 48.0, wear_index]
-
-# -----------------------------
-# 4. DASHBOARD OUTPUT
-# -----------------------------
-st.title(f"System Diagnostics: {'Workstation' if is_windows else 'Mobile'}")
-
-m1, m2, m3, m4 = st.columns(4)
-
-try:
-    with open("model.pkl", "rb") as f:
-        nexus = pickle.load(f)
+    # Risk Logic based on your 35%
+    # Lower battery = Higher Wear = Higher Risk
+    wear_idx = (100 - battery_input) * 2.3
+    temp_k = 302 + (cores * 1.2)
     
-    # Calculate probability using YOUR live battery data
-    risk_prob = nexus["model"].predict_proba([input_vector])[0][1] * 100
-    
-    m1.metric("Failure Risk", f"{risk_prob:.2f}%")
-    m2.metric("Battery Status", f"{actual_pct}%")
-    m3.metric("Logic Processors", cores)
-    m4.metric("Power Source", "External AC" if is_charging else "Battery Port")
+    # Vector: [Type, AirTemp, ProcTemp, Speed, Torque, Wear]
+    input_vec = [1 if is_windows else 0, temp_k, temp_k + 5, cores * 800, 45.0, wear_idx]
 
-    st.divider()
+    # Dashboard
+    st.title(f"System Diagnostics: {'Workstation' if is_windows else 'Mobile'}")
     
-    # Detailed Data Grid for the Pitch
-    col_left, col_right = st.columns(2)
-    with col_left:
-        st.subheader("Hardware Detail")
-        st.write(f"System Architecture: {ua[:60]}...")
-        st.write(f"Voltage Profile: {'Stable' if is_charging else 'Discharge Active'}")
+    c1, c2, c3 = st.columns(3)
     
-    with col_right:
-        st.subheader("AI Vector Stream")
-        st.json({
-            "calculated_wear": round(wear_index, 2),
-            "thermal_input_k": round(thermal_k, 2),
-            "effective_rpm_sim": input_vector[3]
-        })
+    try:
+        with open("model.pkl", "rb") as f:
+            nexus = pickle.load(f)
+        
+        # This will finally move the 0.00% risk!
+        prob = nexus["model"].predict_proba([input_vec])[0][1] * 100
+        
+        c1.metric("Failure Risk", f"{prob:.2f}%")
+        c2.metric("Battery Level", f"{battery_input}%")
+        c3.metric("Logic Cores", cores)
+        
+        st.divider()
+        
+        # Technical Details
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.subheader("Hardware Detail")
+            st.write(f"Identity: {ua[:50]}...")
+            st.write(f"Sensor Mode: {'Automated' if is_auto else 'Manual Override'}")
+        
+        with col_b:
+            st.subheader("Neural Input Stream")
+            st.json({"wear": wear_idx, "temp": temp_k, "vec": input_vec})
 
-except Exception as e:
-    st.error("Model Sync Error: Please ensure model.pkl is in the GitHub repository.")
+    except Exception as e:
+        st.error(f"Model Sync Error: {e}")
 
-# 5-second refresh to track live battery drain
-time.sleep(5)
+else:
+    st.info("Initializing System Bridge...")
+
+# Refresh
+time.sleep(4)
 st.rerun()
