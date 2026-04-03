@@ -5,140 +5,94 @@ import pickle
 import time
 from streamlit_javascript import st_javascript
 
-st.set_page_config(page_title="Nexus AI - Hardware Interface", layout="wide")
+st.set_page_config(page_title="Nexus AI - Live Hardware", layout="wide")
 
 # -----------------------------
-# 1. HARDWARE DATA ACQUISITION
+# 1. THE EXACT HARDWARE PROBE
 # -----------------------------
-# JavaScript bridge to extract real-time browser and hardware metrics
+# This script waits specifically for the Battery Manager to return 
+# the REAL value from your Windows/Android/iOS power management.
 device_js = """
-async function getHardwareData() {
-    let battery = { level: 0.80, charging: true }; 
+async function getLiveHardware() {
+    let batteryData = { level: null, charging: null };
+    
     try {
         if (navigator.getBattery) {
-            const b = await navigator.getBattery();
-            battery = { level: b.level, charging: b.charging };
+            const bat = await navigator.getBattery();
+            batteryData.level = bat.level; // Returns 0.34 for 34%
+            batteryData.charging = bat.charging;
         }
-    } catch (e) { 
-        console.log("Hardware API Access Restricted"); 
+    } catch (e) {
+        console.error("Hardware Access Denied");
     }
 
     return {
         ua: navigator.userAgent,
-        memory: navigator.deviceMemory || 4, 
-        logic_cores: navigator.hardwareConcurrency || 4,
-        battery: battery
+        memory: navigator.deviceMemory || 8,
+        cores: navigator.hardwareConcurrency || 4,
+        battery: batteryData
     };
 }
-getHardwareData();
+getLiveHardware();
 """
 
-# Execute JS
-hw_data = st_javascript(device_js)
+hw = st_javascript(device_js)
 
 # -----------------------------
-# 2. SESSION TIMEOUT / FALLBACK
+# 2. VALIDATION & FALLBACK
 # -----------------------------
-# If JavaScript is blocked or slow, we force the app to load after a short delay
-if "start_time" not in st.session_state:
-    st.session_state.start_time = time.time()
-
-# If no data after 5 seconds, use a generic fallback to prevent hanging
-if not hw_data and (time.time() - st.session_state.start_time > 5):
-    hw_data = {
-        "ua": "Generic/1.0",
-        "memory": 4,
-        "logic_cores": 4,
-        "battery": {"level": 0.85, "charging": True}
-    }
-
-# -----------------------------
-# 3. PROCESSING AND PREDICTION
-# -----------------------------
-if hw_data:
-    ua_string = hw_data.get("ua", "Unknown")
-    
-    # Device Categorization
-    if "iPhone" in ua_string or "iPad" in ua_string:
-        device_label = "Apple iOS Mobile"
-        model_type_code = 0
-    elif "Android" in ua_string:
-        device_label = "Android Mobile"
-        model_type_code = 2
-    else:
-        device_label = "Desktop Workstation"
-        model_type_code = 1
-
-    # Accurate Parameter Extraction
-    raw_battery = hw_data.get("battery", {}).get("level", 0.85)
-    battery_pct = int(raw_battery * 100)
-    core_count = hw_data.get("logic_cores", 4)
-    ram_gb = hw_data.get("memory", 4)
-    is_charging = hw_data.get("battery", {}).get("charging", True)
-
-    # Input Vector Construction [Type, AirTemp, ProcTemp, Speed, Torque, Wear]
-    # Scaling logic to ensure the AI responds to real hardware changes
-    calculated_temp = 30.0 + (core_count * 1.2)
-    wear_factor = (100 - battery_pct) * 2.0
-    
-    input_vector = [
-        model_type_code,
-        calculated_temp + 273.15,
-        calculated_temp + 278.15,
-        core_count * 400,
-        45.0,
-        wear_factor
-    ]
-
-    # -----------------------------
-    # 4. TECHNICAL DASHBOARD UI
-    # -----------------------------
-    st.title(f"System Diagnostics: {device_label}")
-    st.text(f"Node Identity: {hash(ua_string) % 10**8}")
-
-    # Primary Metrics
-    m1, m2, m3, m4 = st.columns(4)
-    
-    try:
-        with open("model.pkl", "rb") as f:
-            nexus_engine = pickle.load(f)
-        
-        predictor = nexus_engine["model"]
-        failure_prob = predictor.predict_proba([input_vector])[0][1] * 100
-        
-        m1.metric("Failure Risk", f"{failure_prob:.2f}%")
-        m2.metric("Battery Status", f"{battery_pct}%")
-        m3.metric("Logic Processors", core_count)
-        m4.metric("System RAM", f"{ram_gb} GB")
-
-        st.divider()
-
-        # Data Visualization / Details
-        col_left, col_right = st.columns(2)
-        
-        with col_left:
-            st.subheader("Hardware Specifications")
-            st.table(pd.DataFrame({
-                "Parameter": ["Architecture", "Power Source", "Compute Density"],
-                "Value": [device_label, "External AC" if is_charging else "Internal Battery", f"{core_count} Logic Cores"]
-            }))
-
-        with col_right:
-            st.subheader("Neural Network Input stream")
-            st.json({
-                "Thermal_K": round(input_vector[2], 2),
-                "Effective_Clock": input_vector[3],
-                "Degradation_Index": round(wear_factor, 2),
-                "Type_ID": model_type_code
-            })
-
-    except Exception as e:
-        st.warning("Model synchronization in progress...")
-
+if hw and hw.get("battery") and hw["battery"]["level"] is not None:
+    # SUCCESS: We have the real 34%
+    real_pct = int(hw["battery"]["level"] * 100)
+    is_charging = hw["battery"]["charging"]
+    device_ua = hw.get("ua", "Unknown")
+    cores = hw.get("cores", 4)
 else:
-    # Display while waiting for JS bridge
-    st.info("Establishing secure hardware handshake. Systems will initialize momentarily.")
+    # WAITING: Show a loading state instead of a wrong number
+    st.info("Synchronizing with System Power Management... Please wait.")
+    st.stop() # Prevents the rest of the app from loading with wrong data
 
-# Real-time refresh loop
-time.sleep(2)
+# -----------------------------
+# 3. DYNAMIC AI RISK LOGIC
+# -----------------------------
+# Now the Failure Risk will change BASED on your 34%
+# Lower battery = Higher simulated wear = Higher Risk
+wear_logic = (100 - real_pct) * 2.1
+temp_logic = 32 + (cores * 1.5)
+
+input_vector = [
+    1 if "Windows" in device_ua else 0, # Type
+    temp_logic + 273,                   # AirTemp
+    temp_logic + 279,                   # ProcTemp
+    cores * 600,                        # Speed
+    45.0,                               # Torque
+    wear_logic                          # Wear
+]
+
+# -----------------------------
+# 4. OUTPUT
+# -----------------------------
+st.title(f"Hardware System: {'Workstation' if 'Windows' in device_ua else 'Mobile'}")
+
+col1, col2, col3 = st.columns(3)
+
+try:
+    with open("model.pkl", "rb") as f:
+        model_data = pickle.load(f)
+    
+    risk = model_data["model"].predict_proba([input_vector])[0][1] * 100
+    
+    col1.metric("Failure Risk", f"{risk:.2f}%")
+    col2.metric("Actual Battery", f"{real_pct}%")
+    col3.metric("Power Source", "AC Adapter" if is_charging else "Battery")
+
+    st.divider()
+    st.subheader("Raw AI Input Stream")
+    st.write(f"Calculated Degradation Index: {wear_logic:.2f}")
+
+except Exception as e:
+    st.error(f"Model Error: {e}")
+
+# Refresh every 5 seconds to catch battery drops
+time.sleep(5)
 st.rerun()
