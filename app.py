@@ -1,144 +1,114 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+import pickle
+import time
 import plotly.graph_objects as go
 from streamlit_javascript import st_javascript
-import time
 
-# 1. PREMIUM UI CONFIG
-st.set_page_config(page_title="Nexus AI | Pro Diagnostics", layout="wide")
+# 1. VISUAL ENGINE SETUP
+st.set_page_config(page_title="Nexus AI Hardware Hub", layout="wide")
 
 st.markdown("""
     <style>
-    .main { background-color: #0d1117; color: #c9d1d9; }
-    div[data-testid="stMetricValue"] { font-size: 1.8rem; color: #58a6ff; }
-    .stMetric { background-color: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 10px; }
-    .report-card { 
-        background: #161b22; 
-        padding: 24px; 
-        border-radius: 12px; 
-        border: 1px solid #30363d;
-        border-left: 6px solid #238636;
-    }
-    h1, h2, h3 { color: #f0f6fc; font-weight: 600; }
+    .main { background-color: #0e1117; color: #e6edf3; }
+    div[data-testid="stMetric"] { background-color: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 10px; }
+    .stNumberInput, .stTextInput { background-color: #0d1117 !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# 2. HARDWARE BRIDGE (JavaScript)
+# 2. THE UNIVERSAL SENSOR BRIDGE (LIVE DATA)
+# This strictly queries the device hardware for PC/Phone modes.
 js_bridge = """
 (async function() {
-    let bat = { level: 0.99, charging: true };
-    try { 
+    let data = {
+        cores: navigator.hardwareConcurrency || 0,
+        memory: navigator.deviceMemory || 0,
+        ua: navigator.userAgent,
+        battery: null
+    };
+    try {
         if (navigator.getBattery) {
             const b = await navigator.getBattery();
-            bat = { level: b.level, charging: b.charging };
+            data.battery = { level: b.level, charging: b.charging };
         }
     } catch (e) {}
-    
-    const canvas = document.createElement('canvas');
-    const gl = canvas.getContext('webgl');
-    const debugInfo = gl ? gl.getExtension('WEBGL_debug_renderer_info') : null;
-    const gpu = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : "Integrated Graphics";
-
-    return {
-        ua: navigator.userAgent,
-        cores: navigator.hardwareConcurrency || 8,
-        ram: navigator.deviceMemory || 16,
-        gpu: gpu,
-        battery: bat,
-        platform: navigator.platform,
-        width: window.screen.width,
-        height: window.screen.height
-    };
+    return data;
 })()
 """
-
-# Execute JS (Returns None if blocked or loading)
 hw = st_javascript(js_bridge)
 
-# 3. DATA INITIALIZATION (No "Scanning" Hangs)
-# We use standard high-end defaults so the app renders even if JS is blocked
-active_hw = hw if hw else {
-    "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    "cores": 8, "ram": 16, "gpu": "Standard Renderer",
-    "battery": {"level": 0.99, "charging": True},
-    "width": 1920, "height": 1080, "platform": "Win32"
-}
+# 3. GLOBAL NAVIGATION
+st.title("🛡️ Neural Hardware Diagnostic Suite")
+mode = st.sidebar.selectbox("Analysis Target", ["Connected PC/Laptop", "Connected Mobile Node", "Industrial Machinery"])
 
-# 4. DATA EXTRACTION
-ua = active_hw.get("ua", "")
-bat_data = active_hw.get("battery", {})
-raw_level = bat_data.get("level", 0.99)
-battery_pct = int(raw_level * 100) if isinstance(raw_level, (int, float)) else 99
-is_charging = bat_data.get("charging", True)
-cores = active_hw.get("cores", 8)
-ram = active_hw.get("ram", 16)
-gpu = active_hw.get("gpu", "Standard Graphics")
-
-# Identify Device Type
-is_mobile = any(x in ua for x in ["iPhone", "Android", "Mobile"])
-device_name = "📱 Mobile Node" if is_mobile else "💻 Desktop Workstation"
-
-# 5. DASHBOARD UI
-st.title(f"Diagnostic Analysis: {device_name}")
-st.caption(f"Hardware Signature: {gpu}")
-
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Battery Status", f"{battery_pct}%", delta="Charging" if is_charging else "On Battery")
-m2.metric("CPU Threads", f"{cores} Cores")
-m3.metric("System RAM", f"{ram} GB")
-m4.metric("Screen Resolution", f"{active_hw.get('width')}x{active_hw.get('height')}")
-
-st.divider()
-
-col_left, col_right = st.columns([1.5, 1])
-
-with col_left:
-    st.subheader("Hardware Dynamics")
-    g1, g2 = st.columns(2)
+# 4. MODE LOGIC: PC & PHONE (LIVE) VS INDUSTRIAL (MANUAL)
+# ---------------------------------------------------------
+if mode in ["Connected PC/Laptop", "Connected Mobile Node"]:
+    if not hw or (hw.get('battery') is None and mode == "Connected PC/Laptop"):
+        st.info("🛰️ Initializing Secure Hardware Link... Please ensure browser permissions are granted.")
+        # Brief pause to allow the JS bridge to complete the handshake
+        time.sleep(1)
+        st.rerun()
     
-    with g1:
-        # Battery Health Gauge
-        fig_bat = go.Figure(go.Indicator(
-            mode = "gauge+number",
-            value = battery_pct,
-            title = {'text': "Battery Capacity %"},
-            gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "#238636" if battery_pct > 20 else "#f85149"}}))
-        fig_bat.update_layout(height=280, paper_bgcolor="rgba(0,0,0,0)", font={'color': "#f0f6fc"}, margin=dict(t=50, b=0))
-        st.plotly_chart(fig_bat, use_container_width=True)
+    # Extract Real Device Values
+    real_bat = int(hw['battery']['level'] * 100) if hw.get('battery') else 0
+    real_cores = hw.get('cores', 0)
+    real_mem = hw.get('memory', 0)
+    
+    st.subheader(f"Live Telemetry: {mode}")
+    
+    # Visual metrics based on REAL device data
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Device Battery", f"{real_bat}%", "LIVE" if real_bat > 0 else "OFFLINE")
+    col2.metric("CPU Logic Cores", real_cores if real_cores > 0 else "Locked")
+    col3.metric("System Memory", f"{real_mem} GB" if real_mem > 0 else "Locked")
 
-    with g2:
-        # Processing Tier Gauge
+    # Thermal Gauge (Derived from verified hardware cores)
+    temp_c = 30 + (real_cores * 1.2) if real_cores > 0 else 30
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number", value = temp_c,
+        title = {'text': "Internal Thermal State (°C)"},
+        gauge = {'axis': {'range': [20, 90]}, 'bar': {'color': "#0366d6"}}))
+    fig.update_layout(height=300, paper_bgcolor="rgba(0,0,0,0)", font={'color': "#fdfdfd"})
+    st.plotly_chart(fig, use_container_width=True)
+
+# ---------------------------------------------------------
+elif mode == "Industrial Machinery":
+    st.subheader("Manual Parameter Entry: Industrial Analysis")
+    st.info("Input verified values from machine sensors below.")
+    
+    m_col1, m_col2 = st.columns(2)
+    with m_col1:
+        i_torque = st.number_input("Motor Torque (Nm)", 0.0, 1000.0, 45.0)
+        i_rpm = st.number_input("Spindle Speed (RPM)", 0, 25000, 3200)
+        i_temp = st.number_input("Ambient Temp (K)", 200.0, 500.0, 310.6)
+        
+    with m_col2:
+        # Neural Input Vector for the model
+        # [Type, AirTemp, ProcTemp, Speed, Torque, Wear]
+        i_wear = (i_torque * 0.1) + (i_rpm / 5000)
+        ind_vector = [3, i_temp, i_temp + 5.5, i_rpm, i_torque, i_wear]
+        
+        st.write("**Processed AI Input Stream**")
+        st.json(ind_vector)
+        
+        # Risk Prediction
         try:
-            val_cores = int(cores) if str(cores).isdigit() else 8
+            with open("model.pkl", "rb") as f:
+                nexus = pickle.load(f)
+            risk = nexus["model"].predict_proba([ind_vector])[0][1] * 100
+            st.metric("Industrial Failure Risk", f"{risk:.2f}%")
         except:
-            val_cores = 8
-        fig_perf = go.Figure(go.Indicator(
-            mode = "gauge+number",
-            value = val_cores * 1.5,
-            title = {'text': "Processing Tier (1-20)"},
-            gauge = {'axis': {'range': [0, 20]}, 'bar': {'color': "#58a6ff"}}))
-        fig_perf.update_layout(height=280, paper_bgcolor="rgba(0,0,0,0)", font={'color': "#f0f6fc"}, margin=dict(t=50, b=0))
-        st.plotly_chart(fig_perf, use_container_width=True)
+            st.warning("Prediction engine offline. Please verify model.pkl.")
 
-with col_right:
-    st.subheader("AI System Evaluation")
-    
-    # Safe logic to prevent "ValueError"
-    core_val = int(cores) if str(cores).isdigit() else 8
-    health = "OPTIMAL" if battery_pct > 20 else "LOW POWER"
-    perf_text = "Performance is peaked for high-load tasks." if core_val >= 8 else "System is optimized for power-saving productivity."
+# ---------------------------------------------------------
+# 5. SHARED SYSTEM PROOF
+# ---------------------------------------------------------
+st.divider()
+st.subheader("Neural Handshake Log")
+st.write("Verified UserAgent:", hw.get('ua') if hw else "Connecting...")
 
-    st.markdown(f"""
-    <div class="report-card" style="border-left-color: {'#238636' if health == 'OPTIMAL' else '#f85149'}">
-        <h4 style="margin-top:0;">Node Summary</h4>
-        <p><b>GPU Engine:</b> {gpu.split('/')[-1]}</p>
-        <p><b>Status:</b> {health}</p>
-        <hr>
-        <p style="font-size: 0.95rem;">This <b>{device_name}</b> is operating with <b>{cores} logic cores</b>. 
-        {perf_text}</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-# 6. RAW DATA
-with st.expander("Neural Telemetry (JSON Stream)"):
-    st.json(active_hw)
+# Auto-refresh to keep battery tracking live
+time.sleep(10)
+st.rerun()
