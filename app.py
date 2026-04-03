@@ -24,7 +24,6 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # 2. AGGRESSIVE HARDWARE BRIDGE (JavaScript)
-# This script attempts to bypass standard blocks to pull real-time hardware data.
 js_bridge = """
 (async function() {
     let bat = { level: "Scanning...", charging: "Scanning..." };
@@ -46,7 +45,7 @@ js_bridge = """
 
     return {
         ua: navigator.userAgent,
-        cores: navigator.hardwareConcurrency || 4,
+        cores: navigator.hardwareConcurrency || "Scanning...",
         ram: navigator.deviceMemory || "N/A",
         gpu: gpu,
         battery: bat,
@@ -57,11 +56,10 @@ js_bridge = """
 })()
 """
 
-# Execute JS (Streamlit will re-run once this returns data)
+# Execute JS
 hw_raw = st_javascript(js_bridge)
 
-# 3. STABLE INITIALIZATION (Prevents the "Synchronizing" freeze)
-# If hw_raw is None, we show "Scanning..." instead of stopping the app.
+# 3. STABLE INITIALIZATION (Prevents the "ValueError" crash)
 if not hw_raw:
     active_hw = {
         "ua": "Detecting System...",
@@ -82,12 +80,12 @@ if isinstance(raw_level, (int, float)):
     battery_pct = int(raw_level * 100)
     bat_display = f"{battery_pct}%"
 else:
-    battery_pct = 50 # Default for visual gauges if blocked
+    battery_pct = 50 
     bat_display = str(raw_level)
 
 is_charging = bat_data.get("charging", False)
-cores = active_hw.get("cores", "N/A")
-ram = active_hw.get("ram", "N/A")
+cores = active_hw.get("cores", "...")
+ram = active_hw.get("ram", "...")
 gpu = active_hw.get("gpu", "Standard Graphics")
 
 # Identify Device Type
@@ -113,7 +111,6 @@ with col_left:
     g1, g2 = st.columns(2)
     
     with g1:
-        # Battery Health Gauge
         fig_bat = go.Figure(go.Indicator(
             mode = "gauge+number",
             value = battery_pct,
@@ -123,8 +120,12 @@ with col_left:
         st.plotly_chart(fig_bat, use_container_width=True)
 
     with g2:
-        # Performance Tier Logic
-        perf_value = (cores * 1.5) if isinstance(cores, int) else 5.0
+        # Performance Tier Logic (Safe conversion)
+        try:
+            val_cores = int(cores) if str(cores).isdigit() else 4
+        except:
+            val_cores = 4
+        perf_value = (val_cores * 1.5)
         fig_perf = go.Figure(go.Indicator(
             mode = "gauge+number",
             value = perf_value,
@@ -136,7 +137,14 @@ with col_left:
 with col_right:
     st.subheader("AI System Evaluation")
     
-    # Human-readable report
+    # SAFE CORE CHECK: Prevents the red "ValueError" box
+    core_str = str(cores)
+    if core_str.isdigit():
+        core_int = int(core_str)
+        perf_text = "Performance is peaked for high-load tasks." if core_int >= 8 else "System is optimized for power-saving productivity."
+    else:
+        perf_text = "Analyzing hardware performance tiers..."
+
     health = "OPTIMAL" if battery_pct > 20 else "LOW POWER"
     
     st.markdown(f"""
@@ -146,16 +154,16 @@ with col_right:
         <p><b>Status:</b> {health}</p>
         <hr>
         <p style="font-size: 0.95rem;">This <b>{device_name}</b> is operating with <b>{cores} logic cores</b>. 
-        {"Performance is peaked for high-load tasks." if cores != 'N/A' and int(cores) >= 8 else "System is optimized for power-saving productivity."}</p>
+        {perf_text}</p>
         <p style="font-size: 0.85rem; color: #8b949e;">Note: If battery says 'Restricted', your browser is blocking hardware access for privacy.</p>
     </div>
     """, unsafe_allow_html=True)
 
-# 6. RAW DATA (For Debugging)
+# 6. RAW DATA
 with st.expander("Neural Telemetry (JSON Stream)"):
     st.json(active_hw)
 
-# 7. SILENT REFRESH (Slow refresh to avoid screen flickering)
+# 7. REFRESH LOGIC
 if hw_raw:
     time.sleep(30)
     st.rerun()
