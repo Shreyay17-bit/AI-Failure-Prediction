@@ -1,122 +1,124 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import pickle
-import time
 import plotly.graph_objects as go
 from streamlit_javascript import st_javascript
+import time
 
-# 1. PREMIUM UI CONFIG
-st.set_page_config(page_title="Nexus AI | Deep Diagnostics", layout="wide", initial_sidebar_state="collapsed")
+# 1. PAGE CONFIG
+st.set_page_config(page_title="Nexus AI | Deep Diagnostics", layout="wide")
 
 st.markdown("""
     <style>
-    .main { background-color: #0e1117; color: #e6edf3; }
-    div[data-testid="stMetric"] { background-color: #161b22; border: 1px solid #30363d; padding: 20px; border-radius: 12px; }
-    h1, h2, h3 { color: #fdfdfd; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
+    .main { background-color: #0d1117; color: #c9d1d9; }
+    .stMetric { background-color: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 10px; }
+    .report-card { background: #161b22; padding: 20px; border-radius: 10px; border-left: 5px solid #238636; }
     </style>
     """, unsafe_allow_html=True)
 
-# 2. THE SILENT HANDSHAKE (No blocking/waiting)
+# 2. ADVANCED JS BRIDGE (Grabs more "fingerprints")
 js_bridge = """
 (async function() {
-    let b = { level: 0.99, charging: true };
-    try {
-        if (navigator.getBattery) {
-            const bat = await navigator.getBattery();
-            b = { level: bat.level, charging: bat.charging };
-        }
-    } catch (e) {}
+    let battery = { level: 1, charging: true };
+    try { if (navigator.getBattery) battery = await navigator.getBattery(); } catch (e) {}
+    
+    // Attempt to get GPU info
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl');
+    const debugInfo = gl ? gl.getExtension('WEBGL_debug_renderer_info') : null;
+    const gpu = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : "Integrated Graphics";
+
     return {
         ua: navigator.userAgent,
-        cores: navigator.hardwareConcurrency || 8,
-        battery: b
+        cores: navigator.hardwareConcurrency || "Unknown",
+        ram: navigator.deviceMemory || "N/A",
+        gpu: gpu,
+        battery: { level: battery.level, charging: battery.charging },
+        platform: navigator.platform
     };
 })()
 """
 hw = st_javascript(js_bridge)
 
-# 3. INSTANT INITIALIZATION (No "Please Wait" barriers)
-# If bridge isn't ready yet, we use the 99% baseline from your taskbar
+# 3. DATA PROCESSING & STANDARDIZATION
 if not hw:
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-    cores = 8
-    battery_pct = 99
-    is_charging = True
+    st.info("⚡ Initializing Diagnostic Neural Link...")
+    st.stop()
+
+# Extract specs
+ua = hw.get("ua", "")
+gpu = hw.get("gpu", "Generic Renderer")
+ram = hw.get("ram", "Unknown")
+cores = hw.get("cores", 4)
+bat = hw.get("battery", {})
+battery_pct = int(bat.get("level", 1) * 100)
+
+# Identify Device
+if "iPhone" in ua or "Android" in ua:
+    device_type = "Mobile Node"
+    icon = "📱"
+elif "Macintosh" in ua:
+    device_type = "MacBook / iMac"
+    icon = "💻"
 else:
-    ua = hw.get("ua", "")
-    cores = hw.get("cores", 8)
-    bat = hw.get("battery", {})
-    battery_pct = int(bat.get("level", 0.99) * 100)
-    is_charging = bat.get("charging", True)
+    device_type = "Windows Workstation"
+    icon = "🖥️"
 
-# 4. PARAMETER CALCULATION (Industrial Metrics)
-is_windows = "Windows" in ua
-type_id = 1 if is_windows else 2
-wear_norm = (100 - battery_pct) / 10.0
-wear_input = (100 - battery_pct) * 2.5
-speed_ghz = round((cores * 850) / 1000.0, 1)
-temp_k = 301.0 + (cores * 1.2)
-
-# Vector: [Type, AirTemp, ProcTemp, Speed, Torque, Wear]
-vector = [type_id, temp_k, temp_k + 5.5, cores * 850, 46.5, wear_input]
-
-# 5. DASHBOARD UI
-st.title(f"Diagnostic Analysis: {'Windows Workstation' if is_windows else 'Mobile Node'}")
-st.caption(f"System UUID: {hash(ua) % 10**8} | Power Source: {'AC Adapter' if is_charging else 'Internal Battery'}")
-
-# Inference
-try:
-    with open("model.pkl", "rb") as f:
-        engine = pickle.load(f)
-    risk = engine["model"].predict_proba([vector])[0][1] * 100
-except:
-    risk = 11.00 # Your verified healthy baseline
-
-# Top Metric Row
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Failure Risk", f"{risk:.2f}%")
-m2.metric("Primary Sensor (Battery)", f"{battery_pct}%")
-m3.metric("Logic Cores", cores)
-m4.metric("System Health", "OPTIMAL" if risk < 30 else "CAUTION")
+# 4. DASHBOARD HEADER
+st.title(f"{icon} System Analysis: {device_type}")
+cols = st.columns(4)
+cols[0].metric("Hardware Cores", f"{cores} Threads")
+cols[1].metric("Memory (Est)", f"{ram} GB")
+cols[2].metric("Battery Level", f"{battery_pct}%", delta="Charging" if bat.get("charging") else "Discharging")
+cols[3].metric("GPU Engine", "Active", help=gpu)
 
 st.divider()
 
-# 6. ENHANCED VISUALS
-col_left, col_right = st.columns([2, 1])
+# 5. VISUAL TELEMETRY
+l, r = st.columns([2, 1])
 
-with col_left:
-    st.subheader("Compute Vector Dynamics")
-    g1, g2 = st.columns(2)
+with l:
+    st.subheader("Performance Vector")
+    # Speed Gauge (Calculated estimate based on cores)
+    speed_est = round((cores * 0.6), 2) 
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number",
+        value = speed_est,
+        title = {'text': "Estimated Throughput (TFLOPS)"},
+        gauge = {'axis': {'range': [0, 15]}, 'bar': {'color': "#58a6ff"}}
+    ))
+    fig.update_layout(height=300, margin=dict(t=0, b=0), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
+    st.plotly_chart(fig, use_container_width=True)
+
+with r:
+    st.subheader("Understable Analysis")
     
-    with g1:
-        fig_clk = go.Figure(go.Indicator(
-            mode = "gauge+number",
-            value = speed_ghz,
-            title = {'text': "Clock Frequency (GHz)"},
-            gauge = {'axis': {'range': [0, 12]}, 'bar': {'color': "#0366d6"}, 'bgcolor': "#161b22"}))
-        fig_clk.update_layout(height=250, paper_bgcolor="rgba(0,0,0,0)", font={'color': "#fdfdfd"})
-        st.plotly_chart(fig_clk, use_container_width=True)
+    # Logic for a human-readable report
+    health_score = 100 - (100 - battery_pct) * 0.5
+    if battery_pct < 20 and not bat.get("charging"):
+        status = "CRITICAL: Low Power Throttling"
+        color = "#f85149"
+    elif cores < 4:
+        status = "LEGACY: Limited Multitasking"
+        color = "#d29922"
+    else:
+        status = "OPTIMAL: High Performance"
+        color = "#238636"
 
-    with g2:
-        fig_wear = go.Figure(go.Indicator(
-            mode = "gauge+number",
-            value = wear_norm,
-            title = {'text': "Degradation (0-10)"},
-            gauge = {'axis': {'range': [0, 10]}, 'bar': {'color': "#2ea043"}, 'bgcolor': "#161b22"}))
-        fig_wear.update_layout(height=250, paper_bgcolor="rgba(0,0,0,0)", font={'color': "#fdfdfd"})
-        st.plotly_chart(fig_wear, use_container_width=True)
+    st.markdown(f"""
+    <div class="report-card" style="border-left-color: {color}">
+        <h4>Diagnostic Summary</h4>
+        <p><b>Status:</b> {status}</p>
+        <p><b>GPU:</b> {gpu}</p>
+        <p><b>Architecture:</b> {ua.split(')')[0].split('(')[-1]}</p>
+        <hr>
+        <small>This node is operating within normal thermal parameters. 
+        The <b>{cores}-core</b> configuration is suitable for { "light tasks" if cores < 6 else "heavy workloads"}.</small>
+    </div>
+    """, unsafe_allow_html=True)
 
-with col_right:
-    st.subheader("Deep Telemetry")
-    st.table(pd.DataFrame({
-        "Parameter": ["Architecture", "Thermal Base", "Bus Speed", "Security"],
-        "Status": ["Desktop" if is_windows else "Mobile", f"{temp_k:.1f} K", f"{vector[3]} MHz", "Encrypted"]
-    }))
+# 6. RAW TELEMETRY DATA
+with st.expander("View Full System Metadata"):
+    st.write(hw)
 
-with st.expander("Neural Input Stream (JSON)"):
-    st.json({"target": type_id, "wear_score": wear_input, "raw_vector": vector})
-
-# Auto-refresh
-time.sleep(10)
+time.sleep(20)
 st.rerun()
