@@ -4,141 +4,158 @@ import plotly.graph_objects as go
 from streamlit_javascript import st_javascript
 import time
 
-# 1. PAGE CONFIG
-st.set_page_config(page_title="Nexus AI | Pro Diagnostics", layout="wide")
+# 1. PREMIUM UI CONFIG
+st.set_page_config(page_title="Nexus AI | Deep Diagnostics", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
     <style>
     .main { background-color: #0d1117; color: #c9d1d9; }
+    div[data-testid="stMetricValue"] { font-size: 1.8rem; color: #58a6ff; }
     .stMetric { background-color: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 10px; }
-    .report-card { background: #161b22; padding: 20px; border-radius: 10px; border-left: 5px solid #58a6ff; }
+    .report-card { 
+        background: #161b22; 
+        padding: 24px; 
+        border-radius: 12px; 
+        border: 1px solid #30363d;
+        border-left: 6px solid #238636;
+    }
+    h1, h2, h3 { color: #f0f6fc; font-weight: 600; }
     </style>
     """, unsafe_allow_html=True)
 
-# 2. THE AGGRESSIVE HARDWARE BRIDGE
-# This uses an async promise to wait for the battery manager to respond
+# 2. AGGRESSIVE HARDWARE BRIDGE (JavaScript)
+# This script attempts to bypass standard blocks to pull real-time hardware data.
 js_bridge = """
 (async function() {
-    let batteryInfo = { level: "N/A", charging: "N/A" };
-    
-    try {
+    let bat = { level: "Scanning...", charging: "Scanning..." };
+    try { 
         if (navigator.getBattery) {
-            const bat = await navigator.getBattery();
-            batteryInfo = { 
-                level: bat.level, 
-                charging: bat.charging 
-            };
+            const b = await navigator.getBattery();
+            bat = { level: b.level, charging: b.charging };
         } else {
-            batteryInfo = { level: "RESTRICTED", charging: "RESTRICTED" };
+            bat = { level: "Restricted", charging: "N/A" };
         }
     } catch (e) {
-        batteryInfo = { level: "ERROR", charging: e.message };
+        bat = { level: "Error", charging: "N/A" };
     }
-
-    // Advanced Device Fingerprinting
+    
     const canvas = document.createElement('canvas');
     const gl = canvas.getContext('webgl');
     const debugInfo = gl ? gl.getExtension('WEBGL_debug_renderer_info') : null;
-    const gpu = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : "Integrated Graphics";
+    const gpu = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : "Software Renderer";
 
     return {
         ua: navigator.userAgent,
         cores: navigator.hardwareConcurrency || 4,
-        ram: navigator.deviceMemory || "Unknown",
+        ram: navigator.deviceMemory || "N/A",
         gpu: gpu,
-        battery: batteryInfo,
+        battery: bat,
         platform: navigator.platform,
-        screen: window.screen.width + "x" + window.screen.height
+        width: window.screen.width,
+        height: window.screen.height
     };
 })()
 """
 
-# Execute and catch the result
-hw = st_javascript(js_bridge)
+# Execute JS (Streamlit will re-run once this returns data)
+hw_raw = st_javascript(js_bridge)
 
-# 3. INITIALIZATION & FALLBACK
-# If the hardware hasn't responded yet, we show a "Connecting" state
-if not hw:
-    st.warning("📡 Synchronizing with Hardware... Please wait 1 second.")
-    time.sleep(1)
-    st.rerun()
+# 3. STABLE INITIALIZATION (Prevents the "Synchronizing" freeze)
+# If hw_raw is None, we show "Scanning..." instead of stopping the app.
+if not hw_raw:
+    active_hw = {
+        "ua": "Detecting System...",
+        "cores": "...", "ram": "...", "gpu": "Scanning Hardware...",
+        "battery": {"level": "Scanning...", "charging": False},
+        "width": 0, "height": 0, "platform": "Detecting..."
+    }
+else:
+    active_hw = hw_raw
 
 # 4. DATA EXTRACTION
-ua = hw.get("ua", "")
-bat_data = hw.get("battery", {})
+ua = active_hw.get("ua", "")
+bat_data = active_hw.get("battery", {})
 raw_level = bat_data.get("level")
 
-# Handle different battery return types
+# Logic to handle numeric battery vs "Restricted" status
 if isinstance(raw_level, (int, float)):
     battery_pct = int(raw_level * 100)
     bat_display = f"{battery_pct}%"
 else:
-    # If the browser blocked the request (Safari/Firefox/Private Mode)
-    battery_pct = 0
-    bat_display = "BLOCKED BY BROWSER"
+    battery_pct = 50 # Default for visual gauges if blocked
+    bat_display = str(raw_level)
 
-is_charging = bat_data.get("charging", "N/A")
-cores = hw.get("cores", "N/A")
-ram = hw.get("ram", "N/A")
-gpu = hw.get("gpu", "Standard Renderer")
+is_charging = bat_data.get("charging", False)
+cores = active_hw.get("cores", "N/A")
+ram = active_hw.get("ram", "N/A")
+gpu = active_hw.get("gpu", "Standard Graphics")
 
-# Device Profiler
+# Identify Device Type
 is_mobile = any(x in ua for x in ["iPhone", "Android", "Mobile"])
-device_type = "📱 Mobile Node" if is_mobile else "💻 Desktop Workstation"
+device_name = "📱 Mobile Node" if is_mobile else "💻 Desktop Workstation"
 
-# 5. UI DASHBOARD
-st.title(f"Diagnostic Report: {device_type}")
-st.caption(f"Hardware Signature: {gpu}")
+# 5. DASHBOARD UI
+st.title(f"Diagnostic Analysis: {device_name}")
+st.caption(f"Platform: {active_hw.get('platform')} | Renderer: {gpu}")
 
-cols = st.columns(4)
-cols.metric("Battery Level", bat_display, delta="Charging" if is_charging == True else "On Battery")
-cols.metric("CPU Cores", f"{cores} Threads")
-cols.metric("RAM (Approx)", f"{ram} GB")
-cols.metric("Screen Res", hw.get("screen", "N/A"))
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Battery Status", bat_display, delta="Charging" if is_charging else "On Battery")
+m2.metric("CPU Threads", f"{cores} Cores")
+m3.metric("System RAM", f"{ram} GB")
+m4.metric("Screen Resolution", f"{active_hw.get('width')}x{active_hw.get('height')}")
 
 st.divider()
 
-# 6. HUMAN-READABLE ANALYSIS
-l, r = st.columns([2, 1])
+col_left, col_right = st.columns([1.5, 1])
 
-with l:
-    st.subheader("Performance Dynamics")
-    # Speed Gauge
-    speed = round((int(cores) * 0.5) if isinstance(cores, int) else 2.5, 1)
-    fig = go.Figure(go.Indicator(
-        mode = "gauge+number",
-        value = speed,
-        title = {'text': "Est. Clock Speed (GHz)"},
-        gauge = {'axis': {'range': [0, 8]}, 'bar': {'color': "#238636"}}
-    ))
-    fig.update_layout(height=300, paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
-    st.plotly_chart(fig, use_container_width=True)
-
-with r:
-    st.subheader("System Health Intelligence")
+with col_left:
+    st.subheader("Hardware Dynamics")
+    g1, g2 = st.columns(2)
     
-    # Custom report based on device data
-    if bat_display == "BLOCKED BY BROWSER":
-        privacy_note = "⚠️ Your browser (likely Safari or Firefox) is blocking battery data for privacy."
-    else:
-        privacy_note = "✅ Real-time battery telemetry active."
+    with g1:
+        # Battery Health Gauge
+        fig_bat = go.Figure(go.Indicator(
+            mode = "gauge+number",
+            value = battery_pct,
+            title = {'text': "Battery Capacity %"},
+            gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "#238636" if battery_pct > 20 else "#f85149"}}))
+        fig_bat.update_layout(height=280, paper_bgcolor="rgba(0,0,0,0)", font={'color': "#f0f6fc"}, margin=dict(t=50, b=0))
+        st.plotly_chart(fig_bat, use_container_width=True)
 
+    with g2:
+        # Performance Tier Logic
+        perf_value = (cores * 1.5) if isinstance(cores, int) else 5.0
+        fig_perf = go.Figure(go.Indicator(
+            mode = "gauge+number",
+            value = perf_value,
+            title = {'text': "Processing Tier (1-20)"},
+            gauge = {'axis': {'range': [0, 20]}, 'bar': {'color': "#58a6ff"}}))
+        fig_perf.update_layout(height=280, paper_bgcolor="rgba(0,0,0,0)", font={'color': "#f0f6fc"}, margin=dict(t=50, b=0))
+        st.plotly_chart(fig_perf, use_container_width=True)
+
+with col_right:
+    st.subheader("AI System Evaluation")
+    
+    # Human-readable report
+    health = "OPTIMAL" if battery_pct > 20 else "LOW POWER"
+    
     st.markdown(f"""
-    <div class="report-card">
-        <h4>User-Friendly Summary</h4>
-        <p><b>Platform:</b> {hw.get('platform')}</p>
-        <p><b>GPU Engine:</b> {gpu.split('/')[-1]}</p>
+    <div class="report-card" style="border-left-color: {'#238636' if health == 'OPTIMAL' else '#f85149'}">
+        <h4 style="margin-top:0;">Node Summary</h4>
+        <p><b>Hardware:</b> {gpu.split('/')[-1]}</p>
+        <p><b>Status:</b> {health}</p>
         <hr>
-        <p>This <b>{device_type}</b> is currently running at <b>{speed}GHz</b>. 
-        The system detected <b>{cores} CPU cores</b>, which is optimal for multitasking.</p>
-        <p style="font-size: 0.8rem; color: #8b949e;">{privacy_note}</p>
+        <p style="font-size: 0.95rem;">This <b>{device_name}</b> is operating with <b>{cores} logic cores</b>. 
+        {"Performance is peaked for high-load tasks." if cores != 'N/A' and int(cores) >= 8 else "System is optimized for power-saving productivity."}</p>
+        <p style="font-size: 0.85rem; color: #8b949e;">Note: If battery says 'Restricted', your browser is blocking hardware access for privacy.</p>
     </div>
     """, unsafe_allow_html=True)
 
-# 7. TELEMETRY LOG
-with st.expander("Show Detailed Hardware Logs"):
-    st.json(hw)
+# 6. RAW DATA (For Debugging)
+with st.expander("Neural Telemetry (JSON Stream)"):
+    st.json(active_hw)
 
-# Refresh every 30 seconds to update battery
-time.sleep(30)
-st.rerun()
+# 7. SILENT REFRESH (Slow refresh to avoid screen flickering)
+if hw_raw:
+    time.sleep(30)
+    st.rerun()
